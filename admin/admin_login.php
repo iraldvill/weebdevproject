@@ -1,13 +1,8 @@
 <?php
-/**
- * Admin login — fully separate from the customer login system.
- * Place at: /admin/admin_login.php
- */
 
 session_start();
 require '../database/config.php';
 
-// Already logged in? Skip straight to the dashboard.
 if (!empty($_SESSION['admin_id'])) {
     header('Location: admin.php');
     exit;

@@ -3,13 +3,7 @@
 session_start();
 require '../database/config.php';
 
-if (empty($_SESSION['admin_id'])) {
-    header('Location: admin_login.php');
-    exit;
-}
-
 $errors = [];
-$success = false;
 $old = ['full_name' => '', 'email' => ''];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -46,8 +40,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'INSERT INTO admins (full_name, email, password_hash) VALUES (?, ?, ?)'
             );
             $insert->execute([$full_name, $email, $hash]);
-            $success = true;
-            $old = ['full_name' => '', 'email' => ''];
+
+            $_SESSION['admin_registered'] = true;
+            header('Location: admin_login.php');
+            exit;
         }
     }
 }
@@ -57,7 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Add Admin — Villaflores Gaming Cafe</title>
+<title>Admin Register — Villaflores Gaming Cafe</title>
 <link rel="stylesheet" href="../style.css">
 <style>
     .auth-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px; }
@@ -72,8 +68,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     .auth-submit { margin-top: 28px; width: 100%; border: none; border-radius: 6px; padding: 14px 0; font-family: var(--font-display); font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; background-color: var(--pink); color: #000000; cursor: pointer; }
     .auth-errors { margin-top: 20px; border-radius: 8px; border: 1px solid var(--pink); background-color: rgba(246,4,126,0.08); padding: 14px 16px; }
     .auth-errors p { font-size: 13px; color: var(--pink); margin: 4px 0; }
-    .auth-success { margin-top: 20px; border-radius: 8px; border: 1px solid var(--cerulean); background-color: rgba(0,161,245,0.08); padding: 14px 16px; }
-    .auth-success p { font-size: 13px; color: var(--cerulean); margin: 4px 0; }
     .auth-footer { margin-top: 20px; font-size: 13px; color: var(--muted-foreground); text-align: center; }
     .auth-footer a { color: var(--cerulean); text-decoration: none; }
 </style>
@@ -81,12 +75,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body>
 <div class="auth-wrap brand-grid">
     <div class="auth-card">
-        <h1 class="auth-title">Add Admin</h1>
-        <p class="auth-sub">Create another staff account with dashboard access.</p>
-
-        <?php if ($success): ?>
-            <div class="auth-success"><p>Admin account created successfully.</p></div>
-        <?php endif; ?>
+        <h1 class="auth-title">Admin Register</h1>
+        <p class="auth-sub">Create a staff account for the admin dashboard.</p>
 
         <?php if (!empty($errors)): ?>
             <div class="auth-errors">
@@ -112,10 +102,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <label for="confirm_password">Confirm Password</label>
                 <input type="password" id="confirm_password" name="confirm_password" minlength="8" maxlength="64" required>
             </div>
-            <button type="submit" class="auth-submit">Create Admin</button>
+            <button type="submit" class="auth-submit">Register</button>
         </form>
 
-        <p class="auth-footer">← <a href="admin.php">Back to dashboard</a></p>
+        <p class="auth-footer">Already have an admin account? <a href="admin_login.php">Log in</a></p>
     </div>
 </div>
 </body>

@@ -36,11 +36,12 @@ $_SESSION['user_id']    = $user['id'];
 $_SESSION['full_name']  = $user['full_name'];
 $_SESSION['email']      = $user['email'];
 
+
 if (!empty($_SESSION['redirect_after_login'])) {
     $target = $_SESSION['redirect_after_login'];
     unset($_SESSION['redirect_after_login']);
     header('Location: ' . $target);
 } else {
-    header('Location: ../homepage/index.php');
+    header('Location: ../account/my_bookings.php');
 }
 exit;

@@ -1,7 +1,7 @@
 <?php
 
 session_start();
-require '../database/config.php'; 
+require '../database/config.php';
 
 if (empty($_SESSION['admin_id'])) {
     header('Location: admin_login.php');
@@ -29,6 +29,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
     exit;
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_booking_status') {
+    $bookingId = (int)($_POST['booking_id'] ?? 0);
+    $newStatus = $_POST['new_status'] ?? '';
+
+    if ($bookingId > 0 && in_array($newStatus, ['confirmed', 'cancelled', 'pending'], true)) {
+        $stmt = $pdo->prepare('UPDATE bookings SET status = ? WHERE id = ?');
+        $stmt->execute([$newStatus, $bookingId]);
+        $_SESSION['admin_flash'] = "Booking #$bookingId marked as $newStatus.";
+    }
+
+    header('Location: admin.php');
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_user') {
+    $userId = (int)($_POST['user_id'] ?? 0);
+
+    if ($userId > 0) {
+        $stmt = $pdo->prepare('DELETE FROM users WHERE id = ?');
+        $stmt->execute([$userId]);
+        $_SESSION['admin_flash'] = $stmt->rowCount() > 0
+            ? "Account #$userId deleted (their bookings and reviews were removed too)."
+            : "Account #$userId was already gone.";
+    }
+
+    header('Location: admin.php');
+    exit;
+}
+
 if (!empty($_SESSION['admin_flash'])) {
     $flash = $_SESSION['admin_flash'];
     unset($_SESSION['admin_flash']);
@@ -40,7 +69,7 @@ $bookings = [];
 $stats = ["total_users" => 0, "total_bookings" => 0, "confirmed_bookings" => 0, "today_bookings" => 0];
 
 try {
-    // --- users ---------------------------------------------------
+    // --- users 
     $users = $pdo->query(
         "SELECT id, full_name, email, created_at FROM users ORDER BY created_at DESC"
     )->fetchAll();
@@ -282,6 +311,42 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
   }
   .btn-delete:hover { border-color: var(--pink); background: rgba(246,4,126,0.08); }
 
+  .btn-confirm {
+    font-family: var(--font-display);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--cerulean);
+    padding: 7px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+  .btn-confirm:hover { border-color: var(--cerulean); background: rgba(0,161,245,0.08); }
+
+  .btn-edit {
+    font-family: var(--font-display);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--foreground);
+    padding: 7px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    transition: border-color 0.2s ease, color 0.2s ease;
+  }
+  .btn-edit:hover { border-color: var(--foreground); }
+
+  .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
   .empty-row td {
     text-align: center;
     color: var(--muted-foreground);
@@ -394,11 +459,29 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
             <td><span class="badge <?= h($status ?: 'default') ?>"><?= h($status ?: '—') ?></span></td>
             <td><?= h($b["created_at"]) ?></td>
             <td>
-              <form method="POST" action="admin.php" onsubmit="return confirm('Delete this booking? This can\'t be undone.');">
-                <input type="hidden" name="action" value="delete_booking">
-                <input type="hidden" name="booking_id" value="<?= h($b["id"]) ?>">
-                <button type="submit" class="btn-delete">Delete</button>
-              </form>
+              <div class="row-actions">
+                <?php if ($status !== 'confirmed'): ?>
+                  <form method="POST" action="admin.php">
+                    <input type="hidden" name="action" value="update_booking_status">
+                    <input type="hidden" name="booking_id" value="<?= h($b["id"]) ?>">
+                    <input type="hidden" name="new_status" value="confirmed">
+                    <button type="submit" class="btn-confirm">Confirm</button>
+                  </form>
+                <?php endif; ?>
+                <?php if ($status !== 'cancelled'): ?>
+                  <form method="POST" action="admin.php">
+                    <input type="hidden" name="action" value="update_booking_status">
+                    <input type="hidden" name="booking_id" value="<?= h($b["id"]) ?>">
+                    <input type="hidden" name="new_status" value="cancelled">
+                    <button type="submit" class="btn-delete">Decline</button>
+                  </form>
+                <?php endif; ?>
+                <form method="POST" action="admin.php" onsubmit="return confirm('Delete this booking? This can\'t be undone.');">
+                  <input type="hidden" name="action" value="delete_booking">
+                  <input type="hidden" name="booking_id" value="<?= h($b["id"]) ?>">
+                  <button type="submit" class="btn-delete">Delete</button>
+                </form>
+              </div>
             </td>
           </tr>
         <?php endforeach; endif; ?>
@@ -419,16 +502,27 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
           <th>Name</th>
           <th>Email</th>
           <th>Joined</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
         <?php if (empty($users)): ?>
-          <tr class="empty-row"><td colspan="3">No accounts yet.</td></tr>
+          <tr class="empty-row"><td colspan="4">No accounts yet.</td></tr>
         <?php else: foreach ($users as $u): ?>
           <tr>
             <td><?= h($u["full_name"]) ?></td>
             <td><?= h($u["email"]) ?></td>
             <td><?= h($u["created_at"]) ?></td>
+            <td>
+              <div class="row-actions">
+                <a href="edit_user.php?id=<?= h($u["id"]) ?>" class="btn-edit">Edit</a>
+                <form method="POST" action="admin.php" onsubmit="return confirm('Delete this account? Their bookings and reviews will be deleted too. This can\'t be undone.');">
+                  <input type="hidden" name="action" value="delete_user">
+                  <input type="hidden" name="user_id" value="<?= h($u["id"]) ?>">
+                  <button type="submit" class="btn-delete">Delete</button>
+                </form>
+              </div>
+            </td>
           </tr>
         <?php endforeach; endif; ?>
       </tbody>

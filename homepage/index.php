@@ -25,15 +25,11 @@
                 <div class="header-actions">
                     <?php if (!empty($_SESSION['user_id'])): ?>
                         <span class="header-greeting">Hi, <?php echo htmlspecialchars($_SESSION['full_name']); ?></span>
+                        <a href="../account/my_bookings.php" class="btn-login">My Bookings</a>
+                        <a href="../logout/logout.php" class="btn-login">Logout</a>
+                    <?php else: ?>
+                        <a href="../login/login.php" class="btn-login">Login</a>
                     <?php endif; ?>
-                    <div class="login-stack">
-                        <?php if (!empty($_SESSION['user_id'])): ?>
-                            <a href="../logout/logout.php" class="btn-login">Logout</a>
-                        <?php else: ?>
-                            <a href="../login/login.php" class="btn-login">Login</a>
-                        <?php endif; ?>
-                        <a href="../admin/admin_login.php" class="admin-login-link">Admin login</a>
-                    </div>
                     <a href="../booking/booking.php" class="btn-book">Book a Seat</a>
                 </div>
             </header>

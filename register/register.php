@@ -144,6 +144,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: var(--cerulean);
             text-decoration: none;
         }
+        .auth-footer.small {
+            margin-top: 8px;
+            font-size: 12px;
+        }
         .auth-errors {
             margin-top: 20px;
             border-radius: 8px;
@@ -198,6 +202,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </form>
 
             <p class="auth-footer">Already have an account? <a href="../login/login.php">Log in</a></p>
+            <p class="auth-footer small">Are you staff? <a href="../admin/admin_register.php">Register as admin</a></p>
         </div>
     </div>
 </body>
