@@ -191,11 +191,8 @@ try {
     if ($_SERVER["REQUEST_METHOD"] === "POST" && ($_POST["action"] ?? "") === "delete_user") {
         $duId = (int)($_POST["user_id"] ?? 0);
         if ($duId > 0 && $duId === (int) $_SESSION["user_id"]) {
-            // Stop an admin from deleting the account they're currently using.
             $_SESSION["self_delete_blocked"] = true;
         } elseif ($duId > 0) {
-            // Their bookings and reviews are removed automatically
-            // (ON DELETE CASCADE on both tables' user_id).
             $del = $pdo->prepare("DELETE FROM users WHERE id = ?");
             $del->execute([$duId]);
         }
@@ -784,7 +781,7 @@ try {
 
 <aside class="sidebar">
   <div>
-    <div class="sidebar-brand">VILLAFLORES <span>ADMIN</span></div>
+    <div class="sidebar-brand">VILLAFLORES <span>GAMING CAFE</span></div>
     <div class="sidebar-welcome">Welcome, <?= h($_SESSION['full_name']) ?></div>
   </div>
 

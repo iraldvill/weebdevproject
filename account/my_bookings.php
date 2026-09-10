@@ -8,10 +8,45 @@ if (empty($_SESSION['user_id'])) {
     exit;
 }
 
+// ---- Admin accounts don't have customer bookings of their own ----
+if (($_SESSION['role'] ?? '') === 'admin') {
+    http_response_code(403);
+    ?>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Not Available — Villaflores Gaming Cafe</title>
+        <link rel="stylesheet" href="../style.css">
+        <style>
+            .error-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px; text-align: center; }
+            .error-card { max-width: 440px; border-radius: 16px; border: 1px solid var(--pink); background-color: var(--card); padding: 40px; }
+            .error-title { font-family: var(--font-display); font-size: 24px; font-weight: 800; text-transform: uppercase; color: var(--pink); }
+            .error-sub { margin-top: 12px; font-size: 14px; color: var(--muted-foreground); line-height: 1.6; }
+            .error-link { display: inline-block; margin-top: 24px; border: none; border-radius: 6px; padding: 12px 24px; font-family: var(--font-display); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; background-color: var(--cerulean); color: #000000; text-decoration: none; }
+        </style>
+    </head>
+    <body>
+        <div class="error-wrap brand-grid">
+            <div class="error-card">
+                <div class="error-title">Not Available for Admins</div>
+                <p class="error-sub">Admin accounts don't have their own bookings. Manage all customer bookings from the Bookings tab in the admin dashboard.</p>
+                <a href="../admin/admin.php" class="error-link">Back to Admin Panel</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    <?php
+    exit;
+}
+
+// ---- Let the customer cancel their own pending/confirmed booking ----
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'cancel_booking') {
     $bookingId = (int)($_POST['booking_id'] ?? 0);
     if ($bookingId > 0) {
- 
+        // The "AND user_id = ?" here is what stops someone from cancelling
+        // a booking that isn't theirs by guessing another booking's id.
         $stmt = $pdo->prepare(
             "UPDATE bookings SET status = 'cancelled' WHERE id = ? AND user_id = ?"
         );
@@ -26,6 +61,20 @@ $stmt = $pdo->prepare(
 );
 $stmt->execute([$_SESSION['user_id']]);
 $bookings = $stmt->fetchAll();
+
+// Station numbers assigned to each booking, e.g. [12 => "PC 3, PC 4"]
+$stationsByBooking = [];
+if (!empty($bookings)) {
+    $bookingIds = array_column($bookings, 'id');
+    $placeholders = implode(',', array_fill(0, count($bookingIds), '?'));
+    $stationStmt = $pdo->prepare(
+        "SELECT booking_id, station_number FROM booking_stations WHERE booking_id IN ($placeholders) ORDER BY station_number"
+    );
+    $stationStmt->execute($bookingIds);
+    foreach ($stationStmt->fetchAll() as $row) {
+        $stationsByBooking[$row['booking_id']][] = $row['station_number'];
+    }
+}
 
 $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
 ?>
@@ -213,8 +262,15 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
                             <span class="value"><?php echo htmlspecialchars($b['booking_time']); ?></span>
                         </div>
                         <div class="booking-meta-item">
-                            <span class="label">Stations</span>
-                            <span class="value"><?php echo htmlspecialchars($b['stations']); ?></span>
+                            <span class="label">PC Station(s)</span>
+                            <span class="value">
+                                <?php
+                                $assignedStations = $stationsByBooking[$b['id']] ?? [];
+                                echo $assignedStations
+                                    ? 'PC ' . htmlspecialchars(implode(', PC ', $assignedStations))
+                                    : htmlspecialchars($b['stations']) . ' station(s)';
+                                ?>
+                            </span>
                         </div>
                         <div class="booking-meta-item">
                             <span class="label">Payment</span>

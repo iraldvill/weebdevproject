@@ -2,18 +2,48 @@
 session_start();
 require '../database/config.php';
 
-
 if (empty($_SESSION['user_id'])) {
     $_SESSION['redirect_after_login'] = $_SERVER['REQUEST_URI'];
     header('Location: ../login/login.php');
     exit;
 }
 
-const TOTAL_STATIONS = 30; 
+if (($_SESSION['role'] ?? '') === 'admin') {
+    http_response_code(403);
+    ?>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Not Available — Villaflores Gaming Cafe</title>
+        <link rel="stylesheet" href="../style.css">
+        <style>
+            .error-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px; text-align: center; }
+            .error-card { max-width: 440px; border-radius: 16px; border: 1px solid var(--pink); background-color: var(--card); padding: 40px; }
+            .error-title { font-family: var(--font-display); font-size: 24px; font-weight: 800; text-transform: uppercase; color: var(--pink); }
+            .error-sub { margin-top: 12px; font-size: 14px; color: var(--muted-foreground); line-height: 1.6; }
+            .error-link { display: inline-block; margin-top: 24px; border: none; border-radius: 6px; padding: 12px 24px; font-family: var(--font-display); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; background-color: var(--cerulean); color: #000000; text-decoration: none; }
+        </style>
+    </head>
+    <body>
+        <div class="error-wrap brand-grid">
+            <div class="error-card">
+                <div class="error-title">Not Available for Admins</div>
+                <p class="error-sub">Admin accounts can't book a seat. If you want to make a booking on a customer's behalf, use "Add Booking" from the admin dashboard instead.</p>
+                <a href="../admin/admin.php" class="error-link">Back to Admin Panel</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    <?php
+    exit;
+}
+
+define('TOTAL_STATIONS', 30);
 
 $allowedPlans   = ['Hourly Gaming', 'Extended Gaming', 'Gaming Package'];
 $allowedMethods = ['gcash', 'maya'];
-
 
 $planPrices = [
     'Hourly Gaming'   => 50,
@@ -29,13 +59,13 @@ if (!in_array($selectedPlan, $allowedPlans, true)) {
 $errors  = [];
 $success = false;
 $successMethod = '';
+$successStations = [];
 
 $old = [
-    'plan'            => $selectedPlan,
-    'date'            => '',
-    'time'            => '',
-    'station_numbers' => [],
-    'payment_method'  => '',
+    'plan'           => $selectedPlan,
+    'date'           => '',
+    'time'           => '',
+    'payment_method' => '',
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -43,28 +73,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $date          = $_POST['booking_date'] ?? '';
     $time          = $_POST['booking_time'] ?? '';
     $paymentMethod = $_POST['payment_method'] ?? '';
-
-    $rawStations = trim($_POST['station_numbers'] ?? '');
-    $stationNumbers = [];
-    if ($rawStations !== '') {
-        foreach (explode(',', $rawStations) as $piece) {
-            $n = (int)trim($piece);
-            if ($n >= 1 && $n <= TOTAL_STATIONS && !in_array($n, $stationNumbers, true)) {
-                $stationNumbers[] = $n;
-            }
-        }
-    }
-    sort($stationNumbers);
+    $stationsRaw   = $_POST['selected_stations'] ?? '';
 
     $old = [
-        'plan'            => $plan,
-        'date'            => $date,
-        'time'            => $time,
-        'station_numbers' => $stationNumbers,
-        'payment_method'  => $paymentMethod,
+        'plan'           => $plan,
+        'date'           => $date,
+        'time'           => $time,
+        'payment_method' => $paymentMethod,
     ];
 
-    // ---- Validation 
+    $selectedStations = array_filter(array_map('intval', explode(',', $stationsRaw)));
+    $selectedStations = array_values(array_unique($selectedStations));
+
     if (!in_array($plan, $allowedPlans, true)) {
         $errors[] = 'Please choose a valid plan.';
     }
@@ -79,55 +99,89 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Please choose a valid time.';
     }
 
-    if (empty($stationNumbers)) {
-        $errors[] = 'Please select at least one station from the grid.';
-    }
-
     if (!in_array($paymentMethod, $allowedMethods, true)) {
         $errors[] = 'Please choose where you will pay.';
     }
 
+    if (empty($selectedStations)) {
+        $errors[] = 'Please select at least one PC station.';
+    }
+    foreach ($selectedStations as $s) {
+        if ($s < 1 || $s > TOTAL_STATIONS) {
+            $errors[] = 'One of the selected stations is invalid.';
+            break;
+        }
+    }
+
+    if (empty($errors)) {
+        $placeholders = implode(',', array_fill(0, count($selectedStations), '?'));
+        $conflictCheck = $pdo->prepare(
+            "SELECT bs.station_number
+             FROM booking_stations bs
+             JOIN bookings b ON b.id = bs.booking_id
+             WHERE bs.booking_date = ? AND bs.booking_time = ?
+               AND b.status != 'cancelled'
+               AND bs.station_number IN ($placeholders)"
+        );
+        $conflictCheck->execute(array_merge([$date, $time], $selectedStations));
+        $conflicts = $conflictCheck->fetchAll();
+
+        if (!empty($conflicts)) {
+            $errors[] = 'This station has been booked! Try something else.';
+        }
+    }
 
     if (empty($errors)) {
         $amountCentavos = $planPrices[$plan] * 100;
-        $stations = count($stationNumbers);
+        $stationsCount  = count($selectedStations);
 
         try {
             $pdo->beginTransaction();
 
-            $stmt = $pdo->prepare(
+            $insert = $pdo->prepare(
                 'INSERT INTO bookings (user_id, plan_name, booking_date, booking_time, stations, amount, payment_method)
                  VALUES (?, ?, ?, ?, ?, ?, ?)'
             );
-            $stmt->execute([$_SESSION['user_id'], $plan, $date, $time, $stations, $amountCentavos, $paymentMethod]);
+            $insert->execute([$_SESSION['user_id'], $plan, $date, $time, $stationsCount, $amountCentavos, $paymentMethod]);
             $bookingId = $pdo->lastInsertId();
 
-            $claim = $pdo->prepare(
+            $assignStation = $pdo->prepare(
                 'INSERT INTO booking_stations (booking_id, station_number, booking_date, booking_time)
                  VALUES (?, ?, ?, ?)'
             );
-            foreach ($stationNumbers as $stationNumber) {
-                $claim->execute([$bookingId, $stationNumber, $date, $time . ':00']);
+            foreach ($selectedStations as $stationNumber) {
+                $assignStation->execute([$bookingId, $stationNumber, $date, $time]);
             }
 
             $pdo->commit();
 
-            $success       = true;
-            $successMethod = $paymentMethod;
-            $old = ['plan' => '', 'date' => '', 'time' => '', 'station_numbers' => [], 'payment_method' => ''];
+            $success          = true;
+            $successMethod    = $paymentMethod;
+            $successStations  = $selectedStations;
+            $old = ['plan' => '', 'date' => '', 'time' => '', 'payment_method' => ''];
         } catch (PDOException $e) {
             $pdo->rollBack();
-
-            if ($e->getCode() === '23000') {
-                $errors[] = 'This station has been booked! Try something else.';
-            } else {
-                $errors[] = 'Something went wrong saving your booking. Please try again.';
-            }
+            $errors[] = 'This station has been booked! Try something else.';
         }
     }
 }
 
 $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
+
+$reservedRows = $pdo->query(
+    "SELECT bs.station_number, bs.booking_date, bs.booking_time
+     FROM booking_stations bs
+     JOIN bookings b ON b.id = bs.booking_id
+     WHERE b.status != 'cancelled'"
+)->fetchAll();
+
+$reservedSlots = array_map(function ($r) {
+    return [
+        'station' => (int) $r['station_number'],
+        'date'    => $r['booking_date'],
+        'time'    => substr($r['booking_time'], 0, 5), 
+    ];
+}, $reservedRows);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -146,7 +200,7 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
         }
         .auth-card {
             width: 100%;
-            max-width: 480px;
+            max-width: 560px;
             border-radius: 16px;
             border: 1px solid var(--border);
             background-color: var(--card);
@@ -271,21 +325,50 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
             text-decoration: underline;
         }
 
-        /* ---- Station availability grid ---- */
-        .station-grid-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+        /* ---- Station picker ---- */
+        .station-picker {
+            margin-top: 8px;
+            max-height: 260px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+            background-color: var(--muted);
         }
-        .station-grid-head .picked-count {
+        .station-btn {
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background-color: var(--card);
+            color: var(--foreground);
+            font-family: var(--font-display);
             font-size: 12px;
-            color: var(--cerulean);
+            font-weight: 700;
+            padding: 10px 0;
+            cursor: pointer;
+            transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+        }
+        .station-btn:hover:not(:disabled) {
+            border-color: var(--cerulean);
+        }
+        .station-btn.selected {
+            background-color: var(--cerulean);
+            border-color: var(--cerulean);
+            color: #000000;
+        }
+        .station-btn:disabled {
+            background-color: var(--background);
+            color: var(--muted-foreground);
+            cursor: not-allowed;
+            opacity: 0.5;
         }
         .station-legend {
-            margin-top: 8px;
+            margin-top: 10px;
             display: flex;
             gap: 16px;
-            font-size: 11px;
+            font-size: 12px;
             color: var(--muted-foreground);
         }
         .station-legend span {
@@ -293,66 +376,17 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
             align-items: center;
             gap: 6px;
         }
-        .legend-dot {
+        .station-legend .swatch {
             width: 10px;
             height: 10px;
             border-radius: 3px;
             display: inline-block;
         }
-        .legend-dot.available { background-color: var(--muted); border: 1px solid var(--border); }
-        .legend-dot.selected { background-color: var(--cerulean); }
-        .legend-dot.booked { background-color: var(--pink); opacity: 0.5; }
-
-        .station-grid {
-            margin-top: 12px;
-            max-height: 220px;
-            overflow-y: auto;
-            display: grid;
-            grid-template-columns: repeat(6, 1fr);
-            gap: 8px;
-            padding: 12px;
-            border-radius: 10px;
-            border: 1px solid var(--border);
-            background-color: var(--muted);
-        }
-        .station-btn {
-            font-family: var(--font-display);
-            font-size: 13px;
-            font-weight: 700;
-            border-radius: 6px;
-            border: 1px solid var(--border);
-            background-color: var(--card);
-            color: var(--foreground);
-            padding: 10px 0;
-            cursor: pointer;
-            transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
-        }
-        .station-btn:hover:not(:disabled) {
-            border-color: var(--cerulean);
-            color: var(--cerulean);
-        }
-        .station-btn.selected {
-            background-color: var(--cerulean);
-            border-color: var(--cerulean);
-            color: #000000;
-        }
-        .station-btn:disabled,
-        .station-btn.booked {
-            background-color: var(--card);
-            border-color: var(--border);
-            color: var(--pink);
-            opacity: 0.45;
-            cursor: not-allowed;
-            text-decoration: line-through;
-        }
-        .station-warning {
-            margin-top: 10px;
-            font-size: 12px;
-            color: var(--pink);
-            min-height: 16px;
-        }
+        .station-legend .swatch.available { background: var(--card); border: 1px solid var(--border); }
+        .station-legend .swatch.selected { background: var(--cerulean); }
+        .station-legend .swatch.taken { background: var(--background); opacity: 0.5; }
         .station-hint {
-            margin-top: 8px;
+            margin-top: 6px;
             font-size: 12px;
             color: var(--muted-foreground);
         }
@@ -471,7 +505,7 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
 <body>
 
     <?php if (!$success): ?>
-   
+    <!-- Payment method pop-up: blocks the form until a choice is made -->
     <div class="modal-overlay" id="paymentModalOverlay">
         <div class="modal-box">
             <h2>Where will you pay?</h2>
@@ -483,7 +517,7 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
         </div>
     </div>
 
-
+    <!-- Review pop-up: shown right before the booking is actually submitted -->
     <div class="modal-overlay" id="reviewModalOverlay" style="display: none;">
         <div class="modal-box">
             <h2>Confirm Your Booking</h2>
@@ -511,6 +545,7 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
             <?php if ($success): ?>
                 <div class="auth-success">
                     <p><strong>Booking submitted!</strong></p>
+                    <p>Station(s) reserved: <strong>PC <?php echo implode(', PC ', $successStations); ?></strong></p>
                     <p>
                         To confirm your seat, please send your payment via
                         <strong><?php echo htmlspecialchars($methodLabels[$successMethod]); ?></strong> to
@@ -531,7 +566,7 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
 
                 <form method="POST" action="booking.php" novalidate id="bookingForm">
                     <input type="hidden" name="payment_method" id="paymentMethodInput" value="<?php echo htmlspecialchars($old['payment_method']); ?>">
-                    <input type="hidden" name="station_numbers" id="stationNumbersInput" value="<?php echo htmlspecialchars(implode(',', $old['station_numbers'])); ?>">
+                    <input type="hidden" name="selected_stations" id="selectedStationsInput" value="">
 
                     <div class="auth-field">
                         <label for="plan">Plan</label>
@@ -557,30 +592,18 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
                     </div>
 
                     <div class="auth-field">
-                        <div class="station-grid-head">
-                            <label style="margin:0;">Pick your station(s)</label>
-                            <span class="picked-count" id="pickedCount">0 selected</span>
-                        </div>
-
-                        <div class="station-grid" id="stationGrid">
+                        <label>Select Your Station(s)</label>
+                        <div class="station-picker" id="stationPicker">
                             <?php for ($n = 1; $n <= TOTAL_STATIONS; $n++): ?>
-                                <button
-                                    type="button"
-                                    class="station-btn<?php echo in_array($n, $old['station_numbers'], true) ? ' selected' : ''; ?>"
-                                    data-station="<?php echo $n; ?>"
-                                    onclick="toggleStation(<?php echo $n; ?>)"
-                                >PC <?php echo $n; ?></button>
+                                <button type="button" class="station-btn" data-station="<?php echo $n; ?>" onclick="toggleStation(<?php echo $n; ?>)">PC <?php echo $n; ?></button>
                             <?php endfor; ?>
                         </div>
-
                         <div class="station-legend">
-                            <span><span class="legend-dot available"></span> Available</span>
-                            <span><span class="legend-dot selected"></span> Selected</span>
-                            <span><span class="legend-dot booked"></span> Booked</span>
+                            <span><span class="swatch available"></span> Available</span>
+                            <span><span class="swatch selected"></span> Selected</span>
+                            <span><span class="swatch taken"></span> Booked</span>
                         </div>
-
-                        <p class="station-hint">Pick a date and time first — availability updates automatically.</p>
-                        <p class="station-warning" id="stationWarning"></p>
+                        <p class="station-hint">Pick a date and time first to see which PCs are free for that slot.</p>
                     </div>
 
                     <div class="payment-picked-row">
@@ -601,90 +624,21 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
 
     <?php if (!$success): ?>
     <script>
-        const paymentOverlay   = document.getElementById('paymentModalOverlay');
-        const reviewOverlay    = document.getElementById('reviewModalOverlay');
-        const methodInput      = document.getElementById('paymentMethodInput');
-        const methodLabel      = document.getElementById('paymentMethodLabel');
-        const reviewBtn        = document.getElementById('reviewBtn');
-        const form             = document.getElementById('bookingForm');
-        const dateInput        = document.getElementById('booking_date');
-        const timeInput        = document.getElementById('booking_time');
-        const stationInput     = document.getElementById('stationNumbersInput');
-        const pickedCountLabel = document.getElementById('pickedCount');
-        const stationWarning   = document.getElementById('stationWarning');
+
+        const reservedSlots = <?php echo json_encode($reservedSlots); ?>;
+
+        const paymentOverlay = document.getElementById('paymentModalOverlay');
+        const reviewOverlay  = document.getElementById('reviewModalOverlay');
+        const methodInput    = document.getElementById('paymentMethodInput');
+        const methodLabel    = document.getElementById('paymentMethodLabel');
+        const reviewBtn      = document.getElementById('reviewBtn');
+        const form           = document.getElementById('bookingForm');
+        const stationsInput  = document.getElementById('selectedStationsInput');
+        const dateInput      = document.getElementById('booking_date');
+        const timeInput      = document.getElementById('booking_time');
 
         const methodDisplayNames = { gcash: 'GCash', maya: 'Maya' };
-
-
-        let selected = new Set(
-            (stationInput.value || '')
-                .split(',')
-                .map(s => parseInt(s, 10))
-                .filter(n => !isNaN(n))
-        );
-        let bookedForSlot = new Set();
-
-        function refreshStationUI() {
-            document.querySelectorAll('.station-btn').forEach(btn => {
-                const num = parseInt(btn.dataset.station, 10);
-                const isBooked = bookedForSlot.has(num);
-
-                btn.classList.toggle('booked', isBooked);
-                btn.disabled = isBooked;
-
-                if (isBooked) {
-                    btn.classList.remove('selected');
-                    selected.delete(num);
-                } else {
-                    btn.classList.toggle('selected', selected.has(num));
-                }
-            });
-
-            stationInput.value = Array.from(selected).sort((a, b) => a - b).join(',');
-            pickedCountLabel.textContent = selected.size + ' selected';
-        }
-
-        function toggleStation(num) {
-            if (bookedForSlot.has(num)) {
-                stationWarning.textContent = 'This station has been booked! Try something else.';
-                return;
-            }
-            stationWarning.textContent = '';
-
-            if (selected.has(num)) {
-                selected.delete(num);
-            } else {
-                selected.add(num);
-            }
-            refreshStationUI();
-        }
-
-        async function fetchAvailability() {
-            const date = dateInput.value;
-            const time = timeInput.value;
-            if (!date || !time) {
-                return;
-            }
-
-            try {
-                const res = await fetch(`check_availability.php?date=${encodeURIComponent(date)}&time=${encodeURIComponent(time)}`);
-                const data = await res.json();
-                bookedForSlot = new Set(data.booked || []);
-                refreshStationUI();
-            } catch (err) {
- 
-                console.error('Could not check station availability', err);
-            }
-        }
-
-        dateInput.addEventListener('change', fetchAvailability);
-        timeInput.addEventListener('change', fetchAvailability);
-
-        if (dateInput.value && timeInput.value) {
-            fetchAvailability();
-        } else {
-            refreshStationUI();
-        }
+        let selectedStations = [];
 
         function choosePaymentMethod(value, label) {
             methodInput.value = value;
@@ -703,29 +657,72 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
             reviewBtn.disabled = true;
         }
 
-        function openReviewModal() {
+        function refreshStationPicker() {
+            const date = dateInput.value;
+            const time = timeInput.value;
 
-            if (!form.reportValidity()) {
+            const takenForSlot = new Set(
+                reservedSlots
+                    .filter(r => r.date === date && r.time === time)
+                    .map(r => r.station)
+            );
+
+            document.querySelectorAll('.station-btn').forEach(btn => {
+                const stationNumber = parseInt(btn.dataset.station, 10);
+                const isTaken = date && time && takenForSlot.has(stationNumber);
+
+                if (isTaken) {
+                    selectedStations = selectedStations.filter(s => s !== stationNumber);
+                    btn.classList.remove('selected');
+                    btn.disabled = true;
+                } else {
+                    btn.disabled = false;
+                    btn.classList.toggle('selected', selectedStations.includes(stationNumber));
+                }
+            });
+
+            stationsInput.value = selectedStations.join(',');
+        }
+
+        function toggleStation(stationNumber) {
+            if (!dateInput.value || !timeInput.value) {
+                alert('Please pick a date and time first.');
                 return;
             }
-            if (selected.size === 0) {
-                stationWarning.textContent = 'Please select at least one station.';
+
+            const index = selectedStations.indexOf(stationNumber);
+            if (index === -1) {
+                selectedStations.push(stationNumber);
+            } else {
+                selectedStations.splice(index, 1);
+            }
+            refreshStationPicker();
+        }
+
+        dateInput.addEventListener('change', refreshStationPicker);
+        timeInput.addEventListener('change', refreshStationPicker);
+
+        function openReviewModal() {
+            if (!form.reportValidity()) {
                 return;
             }
             if (!methodInput.value) {
                 openPaymentModal();
                 return;
             }
+            if (selectedStations.length === 0) {
+                alert('Please select at least one PC station.');
+                return;
+            }
 
             const plan = document.getElementById('plan').value;
             const date = dateInput.value;
             const time = timeInput.value;
-            const stationList = Array.from(selected).sort((a, b) => a - b).map(n => 'PC ' + n).join(', ');
 
             document.getElementById('reviewPlan').textContent     = plan || '—';
             document.getElementById('reviewDate').textContent     = date || '—';
             document.getElementById('reviewTime').textContent     = time || '—';
-            document.getElementById('reviewStations').textContent = stationList || '—';
+            document.getElementById('reviewStations').textContent = 'PC ' + selectedStations.join(', PC ');
             document.getElementById('reviewMethod').textContent   = methodDisplayNames[methodInput.value] || '—';
 
             reviewOverlay.style.display = 'flex';

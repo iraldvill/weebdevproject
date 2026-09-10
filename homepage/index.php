@@ -23,14 +23,20 @@
                     <a href="#community" class="nav-link">Community</a>
                 </nav>
                 <div class="header-actions">
-                    <?php if (!empty($_SESSION['user_id'])): ?>
+                    <?php if (!empty($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'): ?>
+                        <span class="header-greeting">Hi, <?php echo htmlspecialchars($_SESSION['full_name']); ?></span>
+                        <a href="../admin/admin.php" class="btn-login">Admin Panel</a>
+                        <a href="../logout/logout.php" class="btn-login">Logout</a>
+                    <?php elseif (!empty($_SESSION['user_id'])): ?>
                         <span class="header-greeting">Hi, <?php echo htmlspecialchars($_SESSION['full_name']); ?></span>
                         <a href="../account/my_bookings.php" class="btn-login">My Bookings</a>
                         <a href="../logout/logout.php" class="btn-login">Logout</a>
                     <?php else: ?>
                         <a href="../login/login.php" class="btn-login">Login</a>
                     <?php endif; ?>
-                    <a href="../booking/booking.php" class="btn-book">Book a Seat</a>
+                    <?php if (($_SESSION['role'] ?? '') !== 'admin'): ?>
+                        <a href="../booking/booking.php" class="btn-book">Book a Seat</a>
+                    <?php endif; ?>
                 </div>
             </header>
 
