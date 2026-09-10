@@ -1,6 +1,10 @@
 <?php
 session_start();
+require '../database/config.php';
 
+if(isset($_SESSION['user_id'])){
+    header('Location: ../homepage/index.php'); 
+}
 $justRegistered = !empty($_SESSION['registered']);
 unset($_SESSION['registered']);
 

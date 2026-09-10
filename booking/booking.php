@@ -2,25 +2,25 @@
 session_start();
 require '../database/config.php';
 
-// ---- Require login ----
+
 if (empty($_SESSION['user_id'])) {
     $_SESSION['redirect_after_login'] = $_SERVER['REQUEST_URI'];
     header('Location: ../login/login.php');
     exit;
 }
 
+const TOTAL_STATIONS = 30; 
+
 $allowedPlans   = ['Hourly Gaming', 'Extended Gaming', 'Gaming Package'];
 $allowedMethods = ['gcash', 'maya'];
 
-// Price per plan, in pesos. Flat per booking, matching the prices shown
-// on the homepage — not multiplied by station count.
+
 $planPrices = [
     'Hourly Gaming'   => 50,
     'Extended Gaming' => 200,
     'Gaming Package'  => 180,
 ];
 
-// Plan can arrive via ?plan=... from the homepage's Choose Plan buttons.
 $selectedPlan = $_GET['plan'] ?? '';
 if (!in_array($selectedPlan, $allowedPlans, true)) {
     $selectedPlan = '';
@@ -31,29 +31,40 @@ $success = false;
 $successMethod = '';
 
 $old = [
-    'plan'           => $selectedPlan,
-    'date'           => '',
-    'time'           => '',
-    'stations'       => 1,
-    'payment_method' => '',
+    'plan'            => $selectedPlan,
+    'date'            => '',
+    'time'            => '',
+    'station_numbers' => [],
+    'payment_method'  => '',
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $plan          = $_POST['plan'] ?? '';
     $date          = $_POST['booking_date'] ?? '';
     $time          = $_POST['booking_time'] ?? '';
-    $stations      = (int)($_POST['stations'] ?? 1);
     $paymentMethod = $_POST['payment_method'] ?? '';
 
+    $rawStations = trim($_POST['station_numbers'] ?? '');
+    $stationNumbers = [];
+    if ($rawStations !== '') {
+        foreach (explode(',', $rawStations) as $piece) {
+            $n = (int)trim($piece);
+            if ($n >= 1 && $n <= TOTAL_STATIONS && !in_array($n, $stationNumbers, true)) {
+                $stationNumbers[] = $n;
+            }
+        }
+    }
+    sort($stationNumbers);
+
     $old = [
-        'plan'           => $plan,
-        'date'           => $date,
-        'time'           => $time,
-        'stations'       => $stations,
-        'payment_method' => $paymentMethod,
+        'plan'            => $plan,
+        'date'            => $date,
+        'time'            => $time,
+        'station_numbers' => $stationNumbers,
+        'payment_method'  => $paymentMethod,
     ];
 
-    // ---- Validation (server-side, the real gate) ----
+    // ---- Validation 
     if (!in_array($plan, $allowedPlans, true)) {
         $errors[] = 'Please choose a valid plan.';
     }
@@ -68,27 +79,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Please choose a valid time.';
     }
 
-    if ($stations < 1 || $stations > 30) {
-        $errors[] = 'Number of stations must be between 1 and 30.';
+    if (empty($stationNumbers)) {
+        $errors[] = 'Please select at least one station from the grid.';
     }
 
     if (!in_array($paymentMethod, $allowedMethods, true)) {
         $errors[] = 'Please choose where you will pay.';
     }
 
-    // ---- Save the booking (payment is recorded, not processed) ----
+
     if (empty($errors)) {
         $amountCentavos = $planPrices[$plan] * 100;
+        $stations = count($stationNumbers);
 
-        $stmt = $pdo->prepare(
-            'INSERT INTO bookings (user_id, plan_name, booking_date, booking_time, stations, amount, payment_method)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
-        );
-        $stmt->execute([$_SESSION['user_id'], $plan, $date, $time, $stations, $amountCentavos, $paymentMethod]);
+        try {
+            $pdo->beginTransaction();
 
-        $success       = true;
-        $successMethod = $paymentMethod;
-        $old = ['plan' => '', 'date' => '', 'time' => '', 'stations' => 1, 'payment_method' => ''];
+            $stmt = $pdo->prepare(
+                'INSERT INTO bookings (user_id, plan_name, booking_date, booking_time, stations, amount, payment_method)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([$_SESSION['user_id'], $plan, $date, $time, $stations, $amountCentavos, $paymentMethod]);
+            $bookingId = $pdo->lastInsertId();
+
+            $claim = $pdo->prepare(
+                'INSERT INTO booking_stations (booking_id, station_number, booking_date, booking_time)
+                 VALUES (?, ?, ?, ?)'
+            );
+            foreach ($stationNumbers as $stationNumber) {
+                $claim->execute([$bookingId, $stationNumber, $date, $time . ':00']);
+            }
+
+            $pdo->commit();
+
+            $success       = true;
+            $successMethod = $paymentMethod;
+            $old = ['plan' => '', 'date' => '', 'time' => '', 'station_numbers' => [], 'payment_method' => ''];
+        } catch (PDOException $e) {
+            $pdo->rollBack();
+
+            if ($e->getCode() === '23000') {
+                $errors[] = 'This station has been booked! Try something else.';
+            } else {
+                $errors[] = 'Something went wrong saving your booking. Please try again.';
+            }
+        }
     }
 }
 
@@ -236,6 +271,92 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
             text-decoration: underline;
         }
 
+        /* ---- Station availability grid ---- */
+        .station-grid-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .station-grid-head .picked-count {
+            font-size: 12px;
+            color: var(--cerulean);
+        }
+        .station-legend {
+            margin-top: 8px;
+            display: flex;
+            gap: 16px;
+            font-size: 11px;
+            color: var(--muted-foreground);
+        }
+        .station-legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 3px;
+            display: inline-block;
+        }
+        .legend-dot.available { background-color: var(--muted); border: 1px solid var(--border); }
+        .legend-dot.selected { background-color: var(--cerulean); }
+        .legend-dot.booked { background-color: var(--pink); opacity: 0.5; }
+
+        .station-grid {
+            margin-top: 12px;
+            max-height: 220px;
+            overflow-y: auto;
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 8px;
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background-color: var(--muted);
+        }
+        .station-btn {
+            font-family: var(--font-display);
+            font-size: 13px;
+            font-weight: 700;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background-color: var(--card);
+            color: var(--foreground);
+            padding: 10px 0;
+            cursor: pointer;
+            transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+        }
+        .station-btn:hover:not(:disabled) {
+            border-color: var(--cerulean);
+            color: var(--cerulean);
+        }
+        .station-btn.selected {
+            background-color: var(--cerulean);
+            border-color: var(--cerulean);
+            color: #000000;
+        }
+        .station-btn:disabled,
+        .station-btn.booked {
+            background-color: var(--card);
+            border-color: var(--border);
+            color: var(--pink);
+            opacity: 0.45;
+            cursor: not-allowed;
+            text-decoration: line-through;
+        }
+        .station-warning {
+            margin-top: 10px;
+            font-size: 12px;
+            color: var(--pink);
+            min-height: 16px;
+        }
+        .station-hint {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--muted-foreground);
+        }
+
         /* ---- Payment method pop-up ---- */
         .modal-overlay {
             position: fixed;
@@ -350,7 +471,7 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
 <body>
 
     <?php if (!$success): ?>
-    <!-- Payment method pop-up: blocks the form until a choice is made -->
+   
     <div class="modal-overlay" id="paymentModalOverlay">
         <div class="modal-box">
             <h2>Where will you pay?</h2>
@@ -362,7 +483,7 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
         </div>
     </div>
 
-    <!-- Review pop-up: shown right before the booking is actually submitted -->
+
     <div class="modal-overlay" id="reviewModalOverlay" style="display: none;">
         <div class="modal-box">
             <h2>Confirm Your Booking</h2>
@@ -410,6 +531,7 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
 
                 <form method="POST" action="booking.php" novalidate id="bookingForm">
                     <input type="hidden" name="payment_method" id="paymentMethodInput" value="<?php echo htmlspecialchars($old['payment_method']); ?>">
+                    <input type="hidden" name="station_numbers" id="stationNumbersInput" value="<?php echo htmlspecialchars(implode(',', $old['station_numbers'])); ?>">
 
                     <div class="auth-field">
                         <label for="plan">Plan</label>
@@ -435,8 +557,30 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
                     </div>
 
                     <div class="auth-field">
-                        <label for="stations">Number of Stations</label>
-                        <input type="number" id="stations" name="stations" min="1" max="30" value="<?php echo htmlspecialchars($old['stations']); ?>" required>
+                        <div class="station-grid-head">
+                            <label style="margin:0;">Pick your station(s)</label>
+                            <span class="picked-count" id="pickedCount">0 selected</span>
+                        </div>
+
+                        <div class="station-grid" id="stationGrid">
+                            <?php for ($n = 1; $n <= TOTAL_STATIONS; $n++): ?>
+                                <button
+                                    type="button"
+                                    class="station-btn<?php echo in_array($n, $old['station_numbers'], true) ? ' selected' : ''; ?>"
+                                    data-station="<?php echo $n; ?>"
+                                    onclick="toggleStation(<?php echo $n; ?>)"
+                                >PC <?php echo $n; ?></button>
+                            <?php endfor; ?>
+                        </div>
+
+                        <div class="station-legend">
+                            <span><span class="legend-dot available"></span> Available</span>
+                            <span><span class="legend-dot selected"></span> Selected</span>
+                            <span><span class="legend-dot booked"></span> Booked</span>
+                        </div>
+
+                        <p class="station-hint">Pick a date and time first — availability updates automatically.</p>
+                        <p class="station-warning" id="stationWarning"></p>
                     </div>
 
                     <div class="payment-picked-row">
@@ -457,14 +601,90 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
 
     <?php if (!$success): ?>
     <script>
-        const paymentOverlay = document.getElementById('paymentModalOverlay');
-        const reviewOverlay  = document.getElementById('reviewModalOverlay');
-        const methodInput    = document.getElementById('paymentMethodInput');
-        const methodLabel    = document.getElementById('paymentMethodLabel');
-        const reviewBtn      = document.getElementById('reviewBtn');
-        const form           = document.getElementById('bookingForm');
+        const paymentOverlay   = document.getElementById('paymentModalOverlay');
+        const reviewOverlay    = document.getElementById('reviewModalOverlay');
+        const methodInput      = document.getElementById('paymentMethodInput');
+        const methodLabel      = document.getElementById('paymentMethodLabel');
+        const reviewBtn        = document.getElementById('reviewBtn');
+        const form             = document.getElementById('bookingForm');
+        const dateInput        = document.getElementById('booking_date');
+        const timeInput        = document.getElementById('booking_time');
+        const stationInput     = document.getElementById('stationNumbersInput');
+        const pickedCountLabel = document.getElementById('pickedCount');
+        const stationWarning   = document.getElementById('stationWarning');
 
         const methodDisplayNames = { gcash: 'GCash', maya: 'Maya' };
+
+
+        let selected = new Set(
+            (stationInput.value || '')
+                .split(',')
+                .map(s => parseInt(s, 10))
+                .filter(n => !isNaN(n))
+        );
+        let bookedForSlot = new Set();
+
+        function refreshStationUI() {
+            document.querySelectorAll('.station-btn').forEach(btn => {
+                const num = parseInt(btn.dataset.station, 10);
+                const isBooked = bookedForSlot.has(num);
+
+                btn.classList.toggle('booked', isBooked);
+                btn.disabled = isBooked;
+
+                if (isBooked) {
+                    btn.classList.remove('selected');
+                    selected.delete(num);
+                } else {
+                    btn.classList.toggle('selected', selected.has(num));
+                }
+            });
+
+            stationInput.value = Array.from(selected).sort((a, b) => a - b).join(',');
+            pickedCountLabel.textContent = selected.size + ' selected';
+        }
+
+        function toggleStation(num) {
+            if (bookedForSlot.has(num)) {
+                stationWarning.textContent = 'This station has been booked! Try something else.';
+                return;
+            }
+            stationWarning.textContent = '';
+
+            if (selected.has(num)) {
+                selected.delete(num);
+            } else {
+                selected.add(num);
+            }
+            refreshStationUI();
+        }
+
+        async function fetchAvailability() {
+            const date = dateInput.value;
+            const time = timeInput.value;
+            if (!date || !time) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`check_availability.php?date=${encodeURIComponent(date)}&time=${encodeURIComponent(time)}`);
+                const data = await res.json();
+                bookedForSlot = new Set(data.booked || []);
+                refreshStationUI();
+            } catch (err) {
+ 
+                console.error('Could not check station availability', err);
+            }
+        }
+
+        dateInput.addEventListener('change', fetchAvailability);
+        timeInput.addEventListener('change', fetchAvailability);
+
+        if (dateInput.value && timeInput.value) {
+            fetchAvailability();
+        } else {
+            refreshStationUI();
+        }
 
         function choosePaymentMethod(value, label) {
             methodInput.value = value;
@@ -477,8 +697,6 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
             paymentOverlay.style.display = 'flex';
         }
 
-        // If a method was already picked (e.g. form re-rendered after a
-        // validation error), skip showing the pop-up again.
         if (methodInput.value) {
             paymentOverlay.style.display = 'none';
         } else {
@@ -486,9 +704,12 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
         }
 
         function openReviewModal() {
-            // Basic client-side check before showing the review pop-up —
-            // the server re-checks everything regardless.
+
             if (!form.reportValidity()) {
+                return;
+            }
+            if (selected.size === 0) {
+                stationWarning.textContent = 'Please select at least one station.';
                 return;
             }
             if (!methodInput.value) {
@@ -496,15 +717,15 @@ $methodLabels = ['gcash' => 'GCash', 'maya' => 'Maya'];
                 return;
             }
 
-            const plan     = document.getElementById('plan').value;
-            const date     = document.getElementById('booking_date').value;
-            const time     = document.getElementById('booking_time').value;
-            const stations = document.getElementById('stations').value;
+            const plan = document.getElementById('plan').value;
+            const date = dateInput.value;
+            const time = timeInput.value;
+            const stationList = Array.from(selected).sort((a, b) => a - b).map(n => 'PC ' + n).join(', ');
 
             document.getElementById('reviewPlan').textContent     = plan || '—';
             document.getElementById('reviewDate').textContent     = date || '—';
             document.getElementById('reviewTime').textContent     = time || '—';
-            document.getElementById('reviewStations').textContent = stations || '—';
+            document.getElementById('reviewStations').textContent = stationList || '—';
             document.getElementById('reviewMethod').textContent   = methodDisplayNames[methodInput.value] || '—';
 
             reviewOverlay.style.display = 'flex';

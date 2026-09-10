@@ -1,12 +1,4 @@
 <?php
-/**
- * ONE-TIME USE ONLY.
- * Creates the first admin account, then DELETE THIS FILE.
- * Leaving it live means anyone who finds the URL can create
- * their own admin account.
- *
- * Place at: /admin/setup_admin.php
- */
 
 session_start();
 require '../database/config.php';

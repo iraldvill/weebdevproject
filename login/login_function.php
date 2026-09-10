@@ -19,7 +19,7 @@ if ($email === '' || $password === '') {
     exit;
 }
 
-$stmt = $pdo->prepare('SELECT id, full_name, email, password_hash FROM users WHERE email = ?');
+$stmt = $pdo->prepare('SELECT id, full_name, email, password_hash, role FROM users WHERE email = ?');
 $stmt->execute([$email]);
 $user = $stmt->fetch();
 
@@ -35,13 +35,19 @@ session_regenerate_id(true);
 $_SESSION['user_id']    = $user['id'];
 $_SESSION['full_name']  = $user['full_name'];
 $_SESSION['email']      = $user['email'];
+$_SESSION['role']       = $user['role'];
 
+if ($user['role'] === 'admin') {
+    unset($_SESSION['redirect_after_login']);
+    header('Location: ../admin/admin.php');
+    exit;
+}
 
 if (!empty($_SESSION['redirect_after_login'])) {
     $target = $_SESSION['redirect_after_login'];
     unset($_SESSION['redirect_after_login']);
     header('Location: ' . $target);
 } else {
-    header('Location: ../account/my_bookings.php');
+    header('Location: ../homepage/index.php');
 }
 exit;

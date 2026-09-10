@@ -8,12 +8,10 @@ if (empty($_SESSION['user_id'])) {
     exit;
 }
 
-// ---- Let the customer cancel their own pending/confirmed booking ----
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'cancel_booking') {
     $bookingId = (int)($_POST['booking_id'] ?? 0);
     if ($bookingId > 0) {
-        // The "AND user_id = ?" here is what stops someone from cancelling
-        // a booking that isn't theirs by guessing another booking's id.
+ 
         $stmt = $pdo->prepare(
             "UPDATE bookings SET status = 'cancelled' WHERE id = ? AND user_id = ?"
         );
